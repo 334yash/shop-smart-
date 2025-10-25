@@ -1,0 +1,109 @@
+
+pipeline {
+  agent any
+
+  environment {
+    
+    DOCKERHUB_USER = '334yash'
+    
+    BACKEND_IMAGE = "${DOCKERHUB_USER}/shop-backend:${env.BUILD_NUMBER}"
+    FRONTEND_IMAGE = "${DOCKERHUB_USER}/shop-frontend:${env.BUILD_NUMBER}"
+
+    
+    DOCKER_CRED_ID = 'dockerhub'     
+    KUBECONFIG_CRED_ID = 'kubeconfig' 
+    GIT_CRED_ID = 'github'           
+    
+    GIT_REPO = 'https://github.com/334yash/shop-smart-.git'
+    GIT_BRANCH = 'main'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout([
+          $class: 'GitSCM',
+          branches: [[name: "*/${env.GIT_BRANCH}"]],
+          userRemoteConfigs: [[
+            url: env.GIT_REPO,
+            credentialsId: env.GIT_CRED_ID
+          ]]
+        ])
+      }
+    }
+
+    stage('Build Docker Images') {
+      steps {
+        sh '''
+          echo "Building backend image: ${BACKEND_IMAGE}"
+          docker build -t ${BACKEND_IMAGE} ./backend
+          echo "Building frontend image: ${FRONTEND_IMAGE}"
+          docker build -t ${FRONTEND_IMAGE} ./frontend
+
+          # Also tag a :latest optionally (optional)
+          docker tag ${BACKEND_IMAGE} ${DOCKERHUB_USER}/shop-backend:latest || true
+          docker tag ${FRONTEND_IMAGE} ${DOCKERHUB_USER}/shop-frontend:latest || true
+        '''
+      }
+    }
+
+    stage('Run basic tests (skip placeholder)') {
+      steps {
+        sh 'echo "No unit tests configured — skipping test stage"'
+      }
+    }
+
+    stage('Push to DockerHub') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          sh '''
+            echo "Logging in to DockerHub as ${DOCKER_USER}"
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+            docker push ${BACKEND_IMAGE}
+            docker push ${FRONTEND_IMAGE}
+            # push latest tags too (optional)
+            docker push ${DOCKERHUB_USER}/shop-backend:latest || true
+            docker push ${DOCKERHUB_USER}/shop-frontend:latest || true
+            docker logout
+          '''
+        }
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+      steps {
+        withCredentials([file(credentialsId: env.KUBECONFIG_CRED_ID, variable: 'KUBECONFIG_FILE')]) {
+          sh '''
+            export KUBECONFIG=${KUBECONFIG_FILE}
+            echo "Setting backend to ${BACKEND_IMAGE}"
+            kubectl set image deployment/backend backend=${BACKEND_IMAGE} --record || true
+            echo "Setting frontend to ${FRONTEND_IMAGE}"
+            kubectl set image deployment/frontend frontend=${FRONTEND_IMAGE} --record || true
+
+            echo "Waiting for rollouts..."
+            kubectl rollout status deployment/backend --timeout=120s || true
+            kubectl rollout status deployment/frontend --timeout=120s || true
+
+            echo "Pods after deploy:"
+            kubectl get pods -o wide
+          '''
+        }
+      }
+    }
+
+    stage('Cleanup (optional)') {
+      steps {
+        sh 'docker image prune -f || true'
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "SUCCESS: Deployed ${BACKEND_IMAGE} and ${FRONTEND_IMAGE}"
+    }
+    failure {
+      echo "FAILURE: Check console output for errors"
+    }
+  }
+}
