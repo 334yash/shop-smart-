@@ -11,3 +11,4 @@ Git, Docker, Jenkins, Kubernetes (Kind), ArgoCD, Helm, Terraform, Prometheus, Gr
 3. Kubernetes deploys via manifests
 4. ArgoCD watches Git and syncs cluster
 5. Grafana monitors metrics
+6. github trigger hoty ka ny re bhendi 
